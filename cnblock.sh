@@ -10,14 +10,32 @@ if [ "$(id -u)" -ne 0 ]; then
    exit 1
 fi
 
+# 检测包管理器类型
+detect_package_manager() {
+    if command -v apt-get &> /dev/null; then
+        echo "apt"
+    elif command -v apk &> /dev/null; then
+        echo "apk"
+    else
+        echo "未知的包管理器" >&2
+        exit 1
+    fi
+}
+
 # 检查并安装依赖
 check_dependencies() {
     echo "正在检查依赖..."
+    local PM=$(detect_package_manager)
+    
     for pkg in ipset iptables wget; do
         if ! command -v $pkg &> /dev/null; then
             echo "正在安装 $pkg..."
-            apt update -qq
-            apt install -y $pkg
+            if [ "$PM" = "apt" ]; then
+                apt update -qq
+                apt install -y $pkg
+            elif [ "$PM" = "apk" ]; then
+                apk add --no-cache $pkg
+            fi
         fi
     done
 }
@@ -143,6 +161,14 @@ check_daemon_status() {
     echo "            守护进程状态检查                "
     echo "============================================"
     
+    # 检测stat命令风格（GNU/Alpine/BSD）
+    local stat_mode
+    if stat --version 2>/dev/null | grep -q "GNU"; then
+        stat_mode="gnu"
+    else
+        stat_mode="bsd"
+    fi
+    
     # 检查ipset集合
     echo "1. 检查中国IP集合状态:"
     if ipset list china &>/dev/null; then
@@ -210,14 +236,22 @@ check_daemon_status() {
     echo "5. 检查配置文件状态:"
     if [ -f /etc/ipset/ipset.conf ]; then
         echo "   ✓ ipset配置文件存在"
-        echo "   - 上次修改时间: $(stat -c %y /etc/ipset/ipset.conf)"
+        if [ "$stat_mode" = "gnu" ]; then
+            echo "   - 上次修改时间: $(stat -c %y /etc/ipset/ipset.conf 2>/dev/null || stat -f \"%Sm\" /etc/ipset/ipset.conf)"
+        else
+            echo "   - 上次修改时间: $(stat -f '%Sm' /etc/ipset/ipset.conf)"
+        fi
     else
         echo "   ✗ ipset配置文件不存在"
     fi
     
     if [ -f /etc/iptables/rules.v4 ]; then
         echo "   ✓ iptables规则文件存在"
-        echo "   - 上次修改时间: $(stat -c %y /etc/iptables/rules.v4)"
+        if [ "$stat_mode" = "gnu" ]; then
+            echo "   - 上次修改时间: $(stat -c %y /etc/iptables/rules.v4 2>/dev/null || stat -f \"%Sm\" /etc/iptables/rules.v4)"
+        else
+            echo "   - 上次修改时间: $(stat -f '%Sm' /etc/iptables/rules.v4)"
+        fi
     else
         echo "   ✗ iptables规则文件不存在"
     fi
